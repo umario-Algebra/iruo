@@ -1,0 +1,90 @@
+1. Projekti
+Projekt	Opis
+instruktor-projekt	Projekt instruktora
+student1-projekt	Prvi studentski lab
+student2-projekt	Drugi studentski lab
+
+Napomena:
+Za proširenje, svaki student može imati i projekt [ime]-[prezime]-projekt.
+
+2. Korisnici
+Username	Uloga	Projekt	Prava
+pero.peric	student	student1-projekt	admin na svom projektu
+iva.ivic	student	student2-projekt	admin na svom projektu
+mario.maric	instruktor	instruktor-projekt	admin na svim projektima
+admin	sysadmin	svi	admin na svim projektima
+
+Pravila:
+
+Format korisničkog imena: ime.prezime
+
+Password za sve korisnike: TestPSW80!
+
+Svi studenti su admini na svom projektu, instruktor i admin su admini na svima.
+
+3. Mreže, Subneti i Routeri
+Mreža	Projekt	CIDR	Subnet ime	Router ime
+instruktor-projekt-instruktor-net	instruktor-projekt	10.20.0.0/24	instruktor-projekt-instruktor-net-subnet	instruktor-projekt-instruktor-net-router
+instruktor-projekt-instruktor-minio-net	instruktor-projekt	10.50.0.0/24	instruktor-projekt-instruktor-minio-net-subnet	instruktor-projekt-instruktor-minio-net-router
+student1-projekt-student1-net	student1-projekt	10.30.0.0/24	student1-projekt-student1-net-subnet	student1-projekt-student1-net-router
+student2-projekt-student2-net	student2-projekt	10.40.0.0/24	student2-projekt-student2-net-subnet	student2-projekt-student2-net-router
+
+4. Security Grupe
+Naziv	Projekt	Namjena
+instruktor-projekt-secgroup	instruktor-projekt	Svi VM-ovi instruktora
+student1-projekt-secgroup	student1-projekt	Svi VM-ovi studenta 1
+student2-projekt-secgroup	student2-projekt	Svi VM-ovi studenta 2
+
+5. Keypair
+Naziv: labkey
+
+Lokacija public ključa: ~/.ssh/labkey.pub
+
+Koristi se u svim projektima i VM-ovima
+
+6. Virtualne Mašine (VM-ovi)
+VM ime	Projekt	Mreža	Fiksna IP	Image	Security group
+minio-vm	instruktor-projekt	instruktor-projekt-instruktor-minio-net	10.50.0.11	minio-golden	instruktor-projekt-secgroup
+instruktor	instruktor-projekt	instruktor-projekt-instruktor-net	10.20.0.10	ubuntu-jammy	instruktor-projekt-secgroup
+lb-instruktor	instruktor-projekt	instruktor-projekt-instruktor-net	10.20.0.11	lb-golden	instruktor-projekt-secgroup
+wp0-1	instruktor-projekt	instruktor-projekt-instruktor-net	10.20.0.21	wp-golden	instruktor-projekt-secgroup
+wp0-2	instruktor-projekt	instruktor-projekt-instruktor-net	10.20.0.22	wp-golden	instruktor-projekt-secgroup
+jumphost1	student1-projekt	student1-projekt-student1-net	10.30.0.10	ubuntu-jammy	student1-projekt-secgroup
+lb-student1	student1-projekt	student1-projekt-student1-net	10.30.0.11	lb-golden	student1-projekt-secgroup
+wp1-1	student1-projekt	student1-projekt-student1-net	10.30.0.21	wp-golden	student1-projekt-secgroup
+wp1-2	student1-projekt	student1-projekt-student1-net	10.30.0.22	wp-golden	student1-projekt-secgroup
+jumphost2	student2-projekt	student2-projekt-student2-net	10.40.0.10	ubuntu-jammy	student2-projekt-secgroup
+lb-student2	student2-projekt	student2-projekt-student2-net	10.40.0.11	lb-golden-test3	student2-projekt-secgroup
+wp2-1	student2-projekt	student2-projekt-student2-net	10.40.0.21	wp-golden	student2-projekt-secgroup
+wp2-2	student2-projekt	student2-projekt-student2-net	10.40.0.22	wp-golden	student2-projekt-secgroup
+
+NAPOMENA:
+
+VM-ovi tipa wp*-* koji trebaju pristup Minio storageu imaju još jedan NIC na instruktor-projekt-instruktor-minio-net s vlastitim fiksnim IP-om.
+
+Svi VM-ovi imaju dodatno 2 diska (volume): [vmname]-data-1, [vmname]-data-2 (1TB svaki, u vlastitom projektu)
+
+7. Volumes
+Naziv: [vmname]-data-1, [vmname]-data-2
+
+Veličina: 1TB (1024 GB)
+
+Projekt: VM-ov projekt
+
+8. Ostalo
+RC datoteke: /etc/kolla/[projekt]-openrc.sh
+
+Floating IP adrese: Samo za jumphostove i po potrebi.
+
+9. Pravila pristupa i privilegija
+Svaki student vidi i upravlja isključivo svojim projektom/VM-ovima
+
+Instruktor ima admin pristup nad svim projektima
+
+Admin korisnik je admin na svim projektima
+
+Svi VM-ovi koriste isti keypair (labkey)
+
+10. Tagiranje
+Svi resursi (VM, port, mreža, disk) tagirani su s: course=test
+
