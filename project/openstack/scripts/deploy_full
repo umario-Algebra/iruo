@@ -1,268 +1,311 @@
 #!/bin/bash
 set -e
 
-RC_FILE="/etc/kolla/demo-openrc.sh"
-if [[ -f "$RC_FILE" ]]; then
-    source "$RC_FILE"
-else
-    echo "Nema $RC_FILE!"
-    exit 1
-fi
+# ====== KONFIGURACIJA ======
 
-TAG="course=test"
-CSV_FILE="osobe.csv"
+EXT_NET="public"
 KEYPAIR="labkey"
 FLAVOR="m1.medium"
-VOLUME_SIZE=1
-EXT_NET="public"
+TAG="course=test"
+DISK_SIZE=1024 # GB
 
-echo "== 0. Kreiram projekte =="
-for proj in instruktor student1 student2; do
-    if ! openstack project show $proj &>/dev/null; then
-        openstack project create $proj --tag $TAG
-        echo "Kreiran projekt: $proj"
+PROJECTS=("instruktor-projekt" "student1-projekt" "student2-projekt")
+RC_ADMIN="/etc/kolla/admin-openrc.sh"
+
+# VM POPIS: VMNAME|PRJ|NETNAME|IPADDR|IMAGE|SGROUP|MINIO_IP|EXTRA1_NET|EXTRA1_IP|EXTRA2_NET|EXTRA2_IP|EXTRA3_NET|EXTRA3_IP
+VM_LIST=(
+  "minio-vm|instruktor-projekt|instruktor-projekt-instruktor-minio-net|10.50.0.11|minio-golden|instruktor-projekt-secgroup|||"
+  "instruktor|instruktor-projekt|instruktor-projekt-instruktor-net|10.20.0.10|ubuntu-jammy|instruktor-projekt-secgroup|10.50.0.100|student1-projekt-student1-net|10.30.0.100|student2-projekt-student2-net|10.40.0.100|instruktor-projekt-instruktor-minio-net|10.50.0.100"
+  "lb-instruktor|instruktor-projekt|instruktor-projekt-instruktor-net|10.20.0.11|lb-golden|instruktor-projekt-secgroup|||"
+  "wp0-1|instruktor-projekt|instruktor-projekt-instruktor-net|10.20.0.21|wp-golden|instruktor-projekt-secgroup|10.50.0.25|||"
+  "wp0-2|instruktor-projekt|instruktor-projekt-instruktor-net|10.20.0.22|wp-golden|instruktor-projekt-secgroup|10.50.0.26|||"
+  "jumphost1|student1-projekt|student1-projekt-student1-net|10.30.0.10|ubuntu-jammy|student1-projekt-secgroup|||"
+  "lb-student1|student1-projekt|student1-projekt-student1-net|10.30.0.11|lb-golden|student1-projekt-secgroup|||"
+  "wp1-1|student1-projekt|student1-projekt-student1-net|10.30.0.21|wp-golden|student1-projekt-secgroup|10.50.0.21|||"
+  "wp1-2|student1-projekt|student1-projekt-student1-net|10.30.0.22|wp-golden|student1-projekt-secgroup|10.50.0.22|||"
+  "jumphost2|student2-projekt|student2-projekt-student2-net|10.40.0.10|ubuntu-jammy|student2-projekt-secgroup|||"
+  "lb-student2|student2-projekt|student2-projekt-student2-net|10.40.0.11|lb-golden-test3|student2-projekt-secgroup|||"
+  "wp2-1|student2-projekt|student2-projekt-student2-net|10.40.0.21|wp-golden|student2-projekt-secgroup|10.50.0.23|||"
+  "wp2-2|student2-projekt|student2-projekt-student2-net|10.40.0.22|wp-golden|student2-projekt-secgroup|10.50.0.24|||"
+)
+
+NETWORKS=(
+  instruktor-projekt-instruktor-net
+  instruktor-projekt-instruktor-minio-net
+  student1-projekt-student1-net
+  student2-projekt-student2-net
+)
+declare -A NETWORK_CIDRS=(
+  [instruktor-projekt-instruktor-net]="10.20.0.0/24"
+  [instruktor-projekt-instruktor-minio-net]="10.50.0.0/24"
+  [student1-projekt-student1-net]="10.30.0.0/24"
+  [student2-projekt-student2-net]="10.40.0.0/24"
+)
+
+SECURITY_GROUPS=(
+  instruktor-projekt-secgroup
+  student1-projekt-secgroup
+  student2-projekt-secgroup
+)
+
+KEYPAIR_NAME="labkey"
+PUBLIC_KEY_PATH="$HOME/.ssh/id_rsa.pub"
+
+# ====== [1/8] KREIRANJE PROJEKATA ======
+echo
+echo "== [1/8] KREIRANJE PROJEKATA =="
+for PRJ in "${PROJECTS[@]}"; do
+    source "$RC_ADMIN"
+    if ! openstack project show "$PRJ" &>/dev/null; then
+        echo "----> Kreiram projekt: $PRJ"
+        openstack project create "$PRJ"
     else
-        echo "Projekt $proj već postoji"
+        echo "----> Projekt već postoji: $PRJ"
     fi
 done
 
-echo "== 0.1 Kreiram grupe =="
-if ! openstack group show studenti &>/dev/null; then openstack group create studenti; fi
-if ! openstack group show instruktori &>/dev/null; then openstack group create instruktori; fi
+# ====== [2/8] KREIRANJE MREŽA, SUBNETOVA, ROUTERA ======
+echo
+echo "== [2/8] KREIRANJE MREŽA, SUBNETOVA, ROUTERA =="
+for NET in "${NETWORKS[@]}"; do
+    PRJ=$(echo $NET | cut -d'-' -f1-2)
+    CIDR="${NETWORK_CIDRS[$NET]}"
+    NETNAME="$NET"
+    SUBNETNAME="$NET-subnet"
+    ROUTERNAME="$NET-router"
+    source /etc/kolla/${PRJ}-openrc.sh
 
-echo "== 0.2 Kreiram korisnike iz CSV-a i dodjeljujem u projekte i grupe =="
-if [[ ! -f "$CSV_FILE" ]]; then
-    echo "CSV datoteka $CSV_FILE ne postoji!"
-    exit 2
-fi
+    if ! openstack network show "$NETNAME" &>/dev/null; then
+        echo "----> Kreiram mrežu: $NETNAME"
+        openstack network create --project "$PRJ" --tag "$TAG" "$NETNAME"
+    else
+        echo "----> Mreža već postoji: $NETNAME"
+    fi
 
-tail -n +2 "$CSV_FILE" | while IFS=';' read -r ime prezime rola; do
-    USERNAME="${ime}.${prezime}"
-    EMAIL="${USERNAME}@cloudlearn.local"
-    PASSWORD="TestPSW80!"
-    if ! openstack user show "$USERNAME" &>/dev/null; then
-        if [[ "$rola" == "instruktor" ]]; then
-            openstack user create --project instruktor --password "$PASSWORD" --email "$EMAIL" "$USERNAME"
-            openstack group add user instruktori "$USERNAME"
-            openstack role add --user "$USERNAME" --project instruktor admin
-            for sproj in student1 student2; do
-                openstack role add --user "$USERNAME" --project $sproj admin
-            done
+    if ! openstack subnet show "$SUBNETNAME" &>/dev/null; then
+        echo "----> Kreiram subnet: $SUBNETNAME ($CIDR)"
+        openstack subnet create --project "$PRJ" --network "$NETNAME" --subnet-range "$CIDR" --tag "$TAG" "$SUBNETNAME"
+    else
+        echo "----> Subnet već postoji: $SUBNETNAME"
+    fi
+
+    if ! openstack router show "$ROUTERNAME" &>/dev/null; then
+        echo "----> Kreiram router: $ROUTERNAME"
+        openstack router create --project "$PRJ" "$ROUTERNAME"
+        openstack router set --external-gateway "$EXT_NET" "$ROUTERNAME"
+    else
+        echo "----> Router već postoji: $ROUTERNAME"
+    fi
+
+    # Spoji subnet na router (ako već nije)
+    SUBNET_ID=$(openstack subnet show "$SUBNETNAME" -f value -c id)
+    ROUTER_ID=$(openstack router show "$ROUTERNAME" -f value -c id)
+    ROUTER_PORT=$(openstack port list --device-owner network:router_interface --device-id $ROUTER_ID --fixed-ip subnet=$SUBNET_ID -f value -c id)
+    if [[ -z "$ROUTER_PORT" ]]; then
+        echo "----> Dodajem subnet $SUBNETNAME na router $ROUTERNAME"
+        openstack router add subnet "$ROUTERNAME" "$SUBNETNAME"
+    else
+        echo "----> Subnet $SUBNETNAME već spojen na router $ROUTERNAME"
+    fi
+done
+
+# ====== [3/8] KREIRANJE SECURITY GRUPA ======
+echo
+echo "== [3/8] KREIRANJE SECURITY GRUPA =="
+for PRJ in "${PROJECTS[@]}"; do
+    SGNAME="${PRJ}-secgroup"
+    source /etc/kolla/${PRJ}-openrc.sh
+    if ! openstack security group show "$SGNAME" &>/dev/null; then
+        echo "----> Kreiram security grupu: $SGNAME"
+        openstack security group create --project "$PRJ" "$SGNAME" --description "Default grupa za $PRJ"
+        openstack security group rule create --project "$PRJ" --proto icmp "$SGNAME"
+        openstack security group rule create --project "$PRJ" --proto tcp --dst-port 22 "$SGNAME"
+        openstack security group rule create --project "$PRJ" --proto tcp --dst-port 80 "$SGNAME"
+        openstack security group rule create --project "$PRJ" --proto tcp --dst-port 443 "$SGNAME"
+        openstack security group rule create --project "$PRJ" --proto tcp --dst-port 9000 "$SGNAME"
+        openstack security group rule create --project "$PRJ" --proto tcp --dst-port 2049 "$SGNAME"
+        openstack security group rule create --project "$PRJ" --proto udp --dst-port 2049 "$SGNAME"
+    else
+        echo "----> Security grupa već postoji: $SGNAME"
+    fi
+done
+
+KEYPAIR_NAME="labkey"
+PUBLIC_KEY_PATH="$HOME/.ssh/id_rsa.pub"
+
+# ====== [0/8] PROVJERA/UPLOAD KEYPAIR ======
+echo "== [0/8] Provjera keypair-a u svim projektima =="
+for PRJ in "${PROJECTS[@]}"; do
+    source /etc/kolla/${PRJ}-openrc.sh
+    if ! openstack keypair show "$KEYPAIR_NAME" &>/dev/null; then
+        echo "----> Uploadam $KEYPAIR_NAME u projekt $PRJ"
+        openstack keypair create --public-key "$PUBLIC_KEY_PATH" "$KEYPAIR_NAME"
+    else
+        echo "----> Keypair $KEYPAIR_NAME već postoji u projektu $PRJ"
+    fi
+done
+source "$RC_ADMIN"
+
+# ====== [4/8] KREIRANJE PORTOVA ======
+echo
+echo "== [4/8] KREIRANJE PORTOVA =="
+declare -A PRIMARY_PORT_IDS
+declare -A MINIO_PORT_IDS
+declare -A EXTRA_PORT_IDS
+
+for vmline in "${VM_LIST[@]}"; do
+    IFS='|' read -r VMNAME PRJ NETNAME IPADDR IMAGE SGROUP MINIO_IP EXTRA1_NET EXTRA1_IP EXTRA2_NET EXTRA2_IP EXTRA3_NET EXTRA3_IP <<< "$vmline"
+    source /etc/kolla/${PRJ}-openrc.sh
+
+    # Primarni port
+    PORTNAME="${VMNAME}-primarni-port"
+    SUBNETNAME="${NETNAME}-subnet"
+    if ! openstack port show "$PORTNAME" &>/dev/null; then
+        echo "----> Kreiram port: $PORTNAME ($IPADDR/$NETNAME)"
+        PORTID=$(openstack port create --network "$NETNAME" --fixed-ip subnet="$SUBNETNAME",ip-address="$IPADDR" "$PORTNAME" -f value -c id)
+    else
+        echo "----> Port već postoji: $PORTNAME"
+        PORTID=$(openstack port show "$PORTNAME" -f value -c id)
+    fi
+    PRIMARY_PORT_IDS["$VMNAME"]="$PORTID"
+
+    # Minio port (ako treba)
+    if [[ -n "$MINIO_IP" && "$MINIO_IP" != " " ]]; then
+        MINIO_PORTNAME="${VMNAME}-minio-port"
+        MINIO_NET="instruktor-projekt-instruktor-minio-net"
+        MINIO_SUBNET="instruktor-projekt-instruktor-minio-net-subnet"
+        if ! openstack port show "$MINIO_PORTNAME" &>/dev/null; then
+            echo "------> Kreiram MINIO port: $MINIO_PORTNAME ($MINIO_IP/$MINIO_NET)"
+            MPORTID=$(openstack port create --network "$MINIO_NET" --fixed-ip subnet="$MINIO_SUBNET",ip-address="$MINIO_IP" "$MINIO_PORTNAME" -f value -c id)
         else
-            STUDPROJ="student1"
-            [[ "$USERNAME" == "iva.ivic" ]] && STUDPROJ="student2"
-            openstack user create --project $STUDPROJ --password "$PASSWORD" --email "$EMAIL" "$USERNAME"
-            openstack group add user studenti "$USERNAME"
-            openstack role add --user "$USERNAME" --project $STUDPROJ member
+            MPORTID=$(openstack port show "$MINIO_PORTNAME" -f value -c id)
         fi
-        echo "Korisnik $USERNAME kreiran i postavljen."
+        MINIO_PORT_IDS["$VMNAME"]="$MPORTID"
+    fi
+
+    # Dodatni portovi (ako treba)
+    for n in 1 2 3; do
+        EXTRA_NET_VAR="EXTRA${n}_NET"
+        EXTRA_IP_VAR="EXTRA${n}_IP"
+        EXTRA_NET="${!EXTRA_NET_VAR}"
+        EXTRA_IP="${!EXTRA_IP_VAR}"
+        if [[ -n "$EXTRA_NET" && -n "$EXTRA_IP" ]]; then
+            EXTRAPORTNAME="${VMNAME}-${EXTRA_NET}-port"
+            EXTRASUBNET="${EXTRA_NET}-subnet"
+            if ! openstack port show "$EXTRAPORTNAME" &>/dev/null; then
+                echo "------> Kreiram EXTRA port: $EXTRAPORTNAME ($EXTRA_IP/$EXTRA_NET)"
+                EID=$(openstack port create --network "$EXTRA_NET" --fixed-ip subnet="$EXTRASUBNET",ip-address="$EXTRA_IP" "$EXTRAPORTNAME" -f value -c id)
+            else
+                EID=$(openstack port show "$EXTRAPORTNAME" -f value -c id)
+            fi
+            EXTRA_PORT_IDS["$VMNAME-$n"]="$EID"
+        fi
+    done
+done
+
+# ====== [5/8] KREIRANJE VOLUMENA ======
+echo
+echo "== [5/8] KREIRANJE VOLUMENA (2x $DISK_SIZE GB na svaki VM) =="
+for vmline in "${VM_LIST[@]}"; do
+    IFS='|' read -r VMNAME PRJ _ <<< "$vmline"
+    source /etc/kolla/${PRJ}-openrc.sh
+    for i in 1 2; do
+        VOLNAME="${VMNAME}-data-${i}"
+        if ! openstack volume show "$VOLNAME" &>/dev/null; then
+            echo "----> Kreiram volume: $VOLNAME ($DISK_SIZE GB) u projektu $PRJ"
+            openstack volume create --size $DISK_SIZE "$VOLNAME"
+        else
+            echo "----> Volume već postoji: $VOLNAME"
+        fi
+    done
+done
+
+# ====== [6/8] KREIRANJE VM-ova (multi-NIC, bez disk attach) ======
+echo
+echo "== [6/8] VM-OVI KREIRANJE =="
+for vmline in "${VM_LIST[@]}"; do
+    IFS='|' read -r VMNAME PRJ NETNAME IPADDR IMAGE SGROUP MINIO_IP EXTRA1_NET EXTRA1_IP EXTRA2_NET EXTRA2_IP EXTRA3_NET EXTRA3_IP <<< "$vmline"
+    PRIMARY_PORT="${PRIMARY_PORT_IDS[$VMNAME]}"
+    EXTRANICS=""
+    if [[ -n "$MINIO_IP" && "$MINIO_IP" != " " ]]; then
+        MINIO_PORT="${MINIO_PORT_IDS[$VMNAME]}"
+        EXTRANICS+=" --nic port-id=${MINIO_PORT}"
+    fi
+    if [[ -n "$EXTRA1_NET" && -n "$EXTRA1_IP" ]]; then
+        EXTRANICS+=" --nic port-id=${EXTRA_PORT_IDS["$VMNAME-1"]}"
+    fi
+    if [[ -n "$EXTRA2_NET" && -n "$EXTRA2_IP" ]]; then
+        EXTRANICS+=" --nic port-id=${EXTRA_PORT_IDS["$VMNAME-2"]}"
+    fi
+    if [[ -n "$EXTRA3_NET" && -n "$EXTRA3_IP" ]]; then
+        EXTRANICS+=" --nic port-id=${EXTRA_PORT_IDS["$VMNAME-3"]}"
+    fi
+
+    echo "--> Provjeravam VM: $VMNAME u projektu $PRJ"
+    source /etc/kolla/${PRJ}-openrc.sh
+    if ! openstack server show "$VMNAME" &>/dev/null; then
+        echo "----> Kreiram VM: $VMNAME (image=$IMAGE, IP=$IPADDR, secgroup=$SGROUP)"
+        openstack server create \
+            --flavor "$FLAVOR" \
+            --image "$IMAGE" \
+            --nic port-id="$PRIMARY_PORT" \
+            $EXTRANICS \
+            --key-name "$KEYPAIR_NAME" \
+            --security-group "$SGROUP" \
+            "$VMNAME"
     else
-        echo "Korisnik $USERNAME već postoji, preskačem."
+        echo "----> VM već postoji: $VMNAME"
     fi
 done
 
-echo "== 1. Kreiram mreže, rutere, subnetove =="
-declare -A networks=(
-    [instruktor-net]="10.20.0.0/24"
-    [student1-net]="10.30.0.0/24"
-    [student2-net]="10.40.0.0/24"
-    [minio-net]="10.50.0.0/24"
-)
-for net in "${!networks[@]}"; do
-    cidr="${networks[$net]}"
-    project="instruktor"
-    [[ $net == student1* ]] && project="student1"
-    [[ $net == student2* ]] && project="student2"
-    [[ $net == minio* ]] && project="instruktor"
-    # Kreiraj mrežu (sharean je samo minio-net)
-    shareopt=""
-    [[ $net == minio-net ]] && shareopt="--share"
-    if ! openstack network show $net &>/dev/null; then
-        openstack network create --project $project $shareopt --tag $TAG $net
-    fi
-    subnet="${net}-subnet"
-    if ! openstack subnet show $subnet &>/dev/null; then
-        openstack subnet create --network $net --subnet-range $cidr --tag $TAG $subnet
-    fi
-    router="${net}-router"
-    if ! openstack router show $router &>/dev/null; then
-        openstack router create --project $project $router
-    fi
-    # Attach subnet to router
-    if ! openstack router show $router -f json | grep -q "$(openstack subnet show $subnet -f value -c id)"; then
-        openstack router add subnet $router $subnet
-    fi
-    if [[ "$(openstack router show $router -f value -c external_gateway_info)" != *$EXT_NET* ]]; then
-        openstack router set $router --external-gateway $EXT_NET
-    fi
+# ====== [7/8] ČEKANJE NA VM-ove (ACTIVE ili ERROR) ======
+echo
+echo "== [7/8] ČEKANJE NA VM-ove =="
+
+for vmline in "${VM_LIST[@]}"; do
+    IFS='|' read -r VMNAME PRJ _ <<< "$vmline"
+    source /etc/kolla/${PRJ}-openrc.sh
+    echo "----> Čekam da VM $VMNAME postane ACTIVE..."
+    while true; do
+        STATUS=$(openstack server show "$VMNAME" -f value -c status)
+        if [[ "$STATUS" == "ACTIVE" ]]; then
+            echo "----> $VMNAME je ACTIVE!"
+            break
+        elif [[ "$STATUS" == "ERROR" ]]; then
+            echo "----> $VMNAME je u ERROR stanju!"
+            break
+        else
+            echo "    ...$VMNAME status: $STATUS, čekam 5s"
+            sleep 5
+        fi
+    done
 done
 
-echo "== 2. Kreiram security grupe =="
-for proj in instruktor student1 student2; do
-    if ! openstack security group show student-secgroup-$proj &>/dev/null; then
-        openstack security group create --project $proj student-secgroup-$proj --description "Za studente $proj"
-        openstack security group rule create --proto icmp student-secgroup-$proj
-        openstack security group rule create --proto tcp --dst-port 22 student-secgroup-$proj
-        openstack security group rule create --proto tcp --dst-port 80 student-secgroup-$proj
-        openstack security group rule create --proto tcp --dst-port 443 student-secgroup-$proj
-        openstack security group rule create --proto tcp --dst-port 2049 student-secgroup-$proj
-        openstack security group rule create --proto udp --dst-port 2049 student-secgroup-$proj
-        openstack security group rule create --proto tcp --dst-port 9000 student-secgroup-$proj
-    fi
-done
-# Instruktor secgroup
-if ! openstack security group show instruktor-secgroup &>/dev/null; then
-    openstack security group create --project instruktor instruktor-secgroup
-    openstack security group rule create --proto icmp instruktor-secgroup
-    openstack security group rule create --proto tcp --dst-port 22 instruktor-secgroup
-    openstack security group rule create --proto tcp --dst-port 80 instruktor-secgroup
-    openstack security group rule create --proto tcp --dst-port 443 instruktor-secgroup
-    openstack security group rule create --proto tcp --dst-port 2049 instruktor-secgroup
-    openstack security group rule create --proto udp --dst-port 2049 instruktor-secgroup
-    openstack security group rule create --proto tcp --dst-port 9000 instruktor-secgroup
-fi
+# ====== [8/8] ATTACH VOLUMENA (samo na ACTIVE VM) ======
+echo
+echo "== [8/8] ATTACH VOLUMENA =="
 
-echo "== 3. Kreiram portove =="
-declare -A ports
-declare -A fixed_ips=(
-    [instruktor]="10.20.0.10"
-    [student1-jumphost]="10.30.0.10"
-    [student2-jumphost]="10.40.0.10"
-    [student1-wp1]="10.30.0.21"
-    [student1-wp2]="10.30.0.22"
-    [student1-lb]="10.30.0.11"
-    [student2-wp1]="10.40.0.21"
-    [student2-wp2]="10.40.0.22"
-    [student2-lb]="10.40.0.11"
-    [minio]="10.50.0.11"
-)
-declare -A minio_ips=(
-    [student1-wp1]="10.50.0.21"
-    [student1-wp2]="10.50.0.22"
-    [student2-wp1]="10.50.0.23"
-    [student2-wp2]="10.50.0.24"
-)
-# Primarni portovi za sve VM-ove
-for vm in instruktor student1-jumphost student2-jumphost \
-          student1-wp1 student1-wp2 student1-lb \
-          student2-wp1 student2-wp2 student2-lb minio; do
-    net=""
-    [[ $vm == instruktor ]] && net="instruktor-net"
-    [[ $vm == student1-* ]] && net="student1-net"
-    [[ $vm == student2-* ]] && net="student2-net"
-    [[ $vm == minio ]] && net="minio-net"
-    ip="${fixed_ips[$vm]}"
-    portname="${vm}-primarni-port"
-    proj="instruktor"
-    [[ $vm == student1-* ]] && proj="student1"
-    [[ $vm == student2-* ]] && proj="student2"
-    [[ $vm == minio ]] && proj="instruktor"
-    if ! openstack port show "$portname" &>/dev/null; then
-        ports[$vm]=$(openstack port create --project $proj --network $net --fixed-ip ip-address=$ip "$portname" -f value -c id)
+for vmline in "${VM_LIST[@]}"; do
+    IFS='|' read -r VMNAME PRJ _ <<< "$vmline"
+    source /etc/kolla/${PRJ}-openrc.sh
+    STATUS=$(openstack server show "$VMNAME" -f value -c status)
+    if [[ "$STATUS" == "ACTIVE" ]]; then
+        for i in 1 2; do
+            VOLNAME="${VMNAME}-data-${i}"
+            VOL_ID=$(openstack volume show "$VOLNAME" -f value -c id)
+            IS_ATTACHED=$(openstack server volume list "$VMNAME" -f value -c "Volume ID" | grep -w "$VOL_ID" || true)
+            if [[ -z "$IS_ATTACHED" ]]; then
+                echo "----> Attacham $VOLNAME na $VMNAME"
+                openstack server add volume "$VMNAME" "$VOLNAME"
+            else
+                echo "----> Volume $VOLNAME je već attachan na $VMNAME"
+            fi
+        done
     else
-        ports[$vm]=$(openstack port show "$portname" -f value -c id)
-    fi
-done
-# Sekundarni portovi za WP na minio-net
-for vm in student1-wp1 student1-wp2 student2-wp1 student2-wp2; do
-    ip="${minio_ips[$vm]}"
-    portname="${vm}-minio-port"
-    if ! openstack port show "$portname" &>/dev/null; then
-        ports[$portname]=$(openstack port create --project instruktor --network minio-net --fixed-ip ip-address=$ip "$portname" -f value -c id)
-    else
-        ports[$portname]=$(openstack port show "$portname" -f value -c id)
+        echo "!!!! $VMNAME nije ACTIVE (status: $STATUS), preskačem attach volumena!"
+        echo "$VMNAME ($PRJ) nije ACTIVE ($STATUS)" >> error_vm_attach.log
     fi
 done
 
-echo "== 4. Kreiram VM-ove =="
-declare -A vm_proj=(
-    [instruktor]=instruktor
-    [minio]=instruktor
-    [student1-jumphost]=student1
-    [student1-lb]=student1
-    [student1-wp1]=student1
-    [student1-wp2]=student1
-    [student2-jumphost]=student2
-    [student2-lb]=student2
-    [student2-wp1]=student2
-    [student2-wp2]=student2
-)
-declare -A vm_image=(
-    [instruktor]="ubuntu-jammy"
-    [minio]="minio-golden"
-    [student1-jumphost]="ubuntu-jammy"
-    [student1-lb]="lb-golden"
-    [student1-wp1]="wp-golden"
-    [student1-wp2]="wp-golden"
-    [student2-jumphost]="ubuntu-jammy"
-    [student2-lb]="lb-golden-test3"
-    [student2-wp1]="wp-golden"
-    [student2-wp2]="wp-golden"
-)
-declare -A vm_secgroup=(
-    [instruktor]="instruktor-secgroup"
-    [minio]="instruktor-secgroup"
-    [student1-jumphost]="student-secgroup-student1"
-    [student1-lb]="student-secgroup-student1"
-    [student1-wp1]="student-secgroup-student1"
-    [student1-wp2]="student-secgroup-student1"
-    [student2-jumphost]="student-secgroup-student2"
-    [student2-lb]="student-secgroup-student2"
-    [student2-wp1]="student-secgroup-student2"
-    [student2-wp2]="student-secgroup-student2"
-)
-for vm in "${!vm_proj[@]}"; do
-    extra_nics=""
-    if [[ $vm == student1-wp1 || $vm == student1-wp2 ]]; then
-        extra_nics="--nic port-id=${ports[${vm}-minio-port]}"
-    fi
-    if [[ $vm == student2-wp1 || $vm == student2-wp2 ]]; then
-        extra_nics="--nic port-id=${ports[${vm}-minio-port]}"
-    fi
-    if ! openstack server show $vm &>/dev/null; then
-        openstack server create --project "${vm_proj[$vm]}" \
-          --flavor "$FLAVOR" \
-          --image "${vm_image[$vm]}" \
-          --nic port-id=${ports[$vm]} $extra_nics \
-          --key-name "$KEYPAIR" \
-          --security-group "${vm_secgroup[$vm]}" \
-          --tag "$TAG" \
-          "$vm"
-    fi
-done
-
-echo "== 5. Attacham diskove na WP-ove =="
-for vm in student1-wp1 student1-wp2 student2-wp1 student2-wp2; do
-  for i in 1 2; do
-    vol="${vm}-data-$i"
-    proj="student1"
-    [[ $vm == student2-* ]] && proj="student2"
-    if ! openstack volume show "$vol" &>/dev/null; then
-      openstack volume create --project $proj --size $VOLUME_SIZE "$vol"
-    fi
-    if ! openstack server volume list "$vm" | grep -q "$vol"; then
-      openstack server add volume "$vm" "$vol" || echo "Volume $vol je već attachan na $vm, preskačem."
-    fi
-  done
-done
-
-echo "== 6. Dodajem floating IP na jumphostove =="
-declare -A floating_ips=(
-  [student1-jumphost]=192.168.10.123
-  [student2-jumphost]=192.168.10.124
-  [instruktor]=192.168.10.122
-)
-for vm in "${!floating_ips[@]}"; do
-  FIP=${floating_ips[$vm]}
-  if ! openstack floating ip show "$FIP" &>/dev/null; then
-    openstack floating ip create --floating-ip-address "$FIP" public
-  fi
-  # Nađi port s ispravnim IP-em
-  priv_ip="${fixed_ips[$vm]}"
-  port_id=$(openstack port list --fixed-ip ip-address=$priv_ip -f value -c ID)
-  if [[ -n "$port_id" ]]; then
-    openstack server add floating ip "$vm" "$FIP"
-  fi
-done
-
-echo "== Gotovo! Sve je kreirano =="
+echo
+echo "== DEPLOY COMPLETED =="
