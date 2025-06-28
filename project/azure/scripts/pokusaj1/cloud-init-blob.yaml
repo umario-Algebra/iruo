@@ -1,0 +1,22 @@
+#cloud-config
+package_update: true
+packages:
+  - blobfuse2
+write_files:
+  - path: /etc/blobfuse2.yaml
+    content: |
+      version: 2
+      logging:
+        type: syslog
+        level: LOG_DEBUG
+      components:
+        - libfuse
+        - azstorage
+      azstorage:
+        type: block
+        account-name: <STORAGE_ACCOUNT_NAME>
+        container: <CONTAINER_NAME>
+        sas: "<SAS_TOKEN>"
+runcmd:
+  - mkdir -p /mnt/blobcontainer
+  - blobfuse2 mount /mnt/blobcontainer --config-file=/etc/blobfuse2.yaml

@@ -1,0 +1,53 @@
+Get-AzPublicIpAddress -ResourceGroupName muvodic-irou -Name jump-pero-pip
+
+
+ssh -i C:\azure\iruo\project\azure\scripts\.ssh\id_rsa_pero pero@<JUMP_HOST_PUBLIC_IP>
+
+
+nslookup wp-pero
+
+ssh pero@<PRIVATNI_IP_WP_VM>
+
+
+scp -i C:\azure\iruo\project\azure\scripts\.ssh\id_rsa_pero C:\azure\iruo\project\azure\scripts\.ssh\id_rsa_pero pero@52.136.213.136:~/.ssh/id_rsa_pero
+
+
+
+Provjera mountanja storagea i datotečne pohrane
+df -h | grep /mnt
+
+
+Provjera dodatnih diskova na WP VM-u
+lsblk
+sudo fdisk -l
+
+F) Provjera Network Security Group (NSG)
+U Azure portalu, otvori NSG i screenshotaj pravila.
+
+Moraš imati pravila koja dozvoljavaju:
+
+SSH na jump host iz tvoje javne IP
+
+promet iz LB prema WP VM (na port 80)
+
+promet unutar subneta (ako koristiš jump-to-wp)
+
+I zabranu ostalih ulaza na WP VM-ove!
+
+
+) Provjera tko ima pristup kojim VM-ovima
+Pokaži kroz SSH da student može samo na svoje, instruktor može svugdje (ako si upisao oba ključa).
+
+Za prava na Azure resursima (RBAC) –
+koristiš li jedan globalni račun, opiši ograničenje (“Zbog studentskog limita svi koriste istog Azure korisnika, u produkciji bi RBAC …”)
+
+
+H) Provjera veličine VM-ova
+Na bilo kojem VM-u:
+
+bash
+Copy
+Edit
+lscpu | grep -E 'Model name|CPU\(s\)'
+free -h
+(screenshotaj, vidiš npr. 1 CPU, 1 GB RAM – Standard_B1s)

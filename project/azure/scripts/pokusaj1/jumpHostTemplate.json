@@ -1,0 +1,116 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "location": { "type": "string" },
+    "naziv": { "type": "string" },
+    "sshKey": { "type": "string" },
+    "subnetId": { "type": "string" }
+  },
+  "resources": [
+    {
+      "type": "Microsoft.Network/publicIPAddresses",
+      "apiVersion": "2021-02-01",
+      "name": "[concat('vm-', parameters('naziv'), '-jumphost-pip')]",
+      "location": "[parameters('location')]",
+      "tags": { "course": "test" },
+      "sku": { "name": "Basic" },
+      "properties": { "publicIPAllocationMethod": "Dynamic" }
+    },
+    {
+      "type": "Microsoft.Network/networkSecurityGroups",
+      "apiVersion": "2021-02-01",
+      "name": "[concat('vm-', parameters('naziv'), '-jumphost-nsg')]",
+      "location": "[parameters('location')]",
+      "tags": { "course": "test" },
+      "properties": {
+        "securityRules": [
+          {
+            "name": "AllowSSH",
+            "properties": {
+              "protocol": "Tcp",
+              "sourcePortRange": "*",
+              "destinationPortRange": "22",
+              "sourceAddressPrefix": "*",
+              "destinationAddressPrefix": "*",
+              "access": "Allow",
+              "priority": 1000,
+              "direction": "Inbound"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "type": "Microsoft.Network/networkInterfaces",
+      "apiVersion": "2021-02-01",
+      "name": "[concat('vm-', parameters('naziv'), '-jumphost-nic')]",
+      "location": "[parameters('location')]",
+      "tags": { "course": "test" },
+      "dependsOn": [
+        "[resourceId('Microsoft.Network/publicIPAddresses', concat('vm-', parameters('naziv'), '-jumphost-pip'))]",
+        "[resourceId('Microsoft.Network/networkSecurityGroups', concat('vm-', parameters('naziv'), '-jumphost-nsg'))]"
+      ],
+      "properties": {
+        "ipConfigurations": [
+          {
+            "name": "ipconfig1",
+            "properties": {
+              "subnet": { "id": "[parameters('subnetId')]" },
+              "publicIPAddress": {
+                "id": "[resourceId('Microsoft.Network/publicIPAddresses', concat('vm-', parameters('naziv'), '-jumphost-pip'))]"
+              }
+            }
+          }
+        ],
+        "networkSecurityGroup": {
+          "id": "[resourceId('Microsoft.Network/networkSecurityGroups', concat('vm-', parameters('naziv'), '-jumphost-nsg'))]"
+        }
+      }
+    },
+    {
+      "type": "Microsoft.Compute/virtualMachines",
+      "apiVersion": "2021-07-01",
+      "name": "[concat('vm-', parameters('naziv'), '-jumphost')]",
+      "location": "[parameters('location')]",
+      "tags": { "course": "test" },
+      "dependsOn": [
+        "[resourceId('Microsoft.Network/networkInterfaces', concat('vm-', parameters('naziv'), '-jumphost-nic'))]"
+      ],
+      "properties": {
+        "hardwareProfile": { "vmSize": "Standard_B1s" },
+        "osProfile": {
+          "computerName": "[concat('vm-', parameters('naziv'), '-jumphost')]",
+          "adminUsername": "[parameters('naziv')]",
+          "linuxConfiguration": {
+            "disablePasswordAuthentication": true,
+            "ssh": {
+              "publicKeys": [
+                {
+                  "path": "[concat('/home/', parameters('naziv'), '/.ssh/authorized_keys')]",
+                  "keyData": "[parameters('sshKey')]"
+                }
+              ]
+            }
+          }
+        },
+        "storageProfile": {
+          "imageReference": {
+            "publisher": "Canonical",
+            "offer": "0001-com-ubuntu-server-jammy",
+            "sku": "22_04-lts",
+            "version": "latest"
+          },
+          "osDisk": { "createOption": "FromImage" }
+        },
+        "networkProfile": {
+          "networkInterfaces": [
+            {
+              "id": "[resourceId('Microsoft.Network/networkInterfaces', concat('vm-', parameters('naziv'), '-jumphost-nic'))]"
+            }
+          ]
+        }
+      }
+    }
+  ]
+}

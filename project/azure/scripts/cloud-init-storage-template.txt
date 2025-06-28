@@ -1,0 +1,25 @@
+#cloud-config
+package_update: true
+package_upgrade: true
+packages:
+  - apache2
+  - cifs-utils
+
+mounts:
+  - [ "//${storageAccount}.file.core.windows.net/${fileShareName}", "/mnt/azurefiles", "cifs", "vers=3.0,username=${storageAccount},password=${storageKey},dir_mode=0777,file_mode=0777,serverino", "0", "0" ]
+
+write_files:
+  - path: /var/www/html/index.html
+    permissions: '0644'
+    content: |
+      <html>
+      <head><title>Pozdrav</title></head>
+      <body>
+      <h1>Ovo je stranica od studenta Pero</h1>
+      <p>Deployano kroz cloud-init!</p>
+      </body>
+      </html>
+
+runcmd:
+  - systemctl enable apache2
+  - systemctl restart apache2

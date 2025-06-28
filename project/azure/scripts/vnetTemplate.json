@@ -1,0 +1,70 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "vnetName": {
+      "type": "string",
+      "defaultValue": "muvodic-irou-net"
+    },
+    "location": {
+      "type": "string",
+      "defaultValue": "westeurope"
+    },
+    "addressPrefix": {
+      "type": "string",
+      "defaultValue": "10.10.0.0/16"
+    }
+  },
+  "variables": {
+    "subnets": [
+      {
+        "name": "subnet-pero",
+        "addressPrefix": "10.10.10.0/24"
+      },
+      {
+        "name": "subnet-iva",
+        "addressPrefix": "10.10.20.0/24"
+      },
+      {
+        "name": "subnet-mario",
+        "addressPrefix": "10.10.30.0/24"
+      }
+    ]
+  },
+  "resources": [
+    {
+      "type": "Microsoft.Network/virtualNetworks",
+      "apiVersion": "2022-01-01",
+      "name": "[parameters('vnetName')]",
+      "location": "[parameters('location')]",
+	  "tags": { "course": "test" },
+      "properties": {
+        "addressSpace": {
+          "addressPrefixes": [
+            "[parameters('addressPrefix')]"
+          ]
+        },
+        "subnets": [
+          {
+            "name": "[variables('subnets')[0].name]",
+            "properties": {
+              "addressPrefix": "[variables('subnets')[0].addressPrefix]"
+            }
+          },
+          {
+            "name": "[variables('subnets')[1].name]",
+            "properties": {
+              "addressPrefix": "[variables('subnets')[1].addressPrefix]"
+            }
+          },
+          {
+            "name": "[variables('subnets')[2].name]",
+            "properties": {
+              "addressPrefix": "[variables('subnets')[2].addressPrefix]"
+            }
+          }
+        ]
+      }
+    }
+  ]
+}

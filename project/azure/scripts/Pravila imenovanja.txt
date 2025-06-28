@@ -1,0 +1,49 @@
+# Osnovni prefiks za sve resurse:
+# muvodic-irou
+
+# Resource Group
+Resource Group:        muvodic-irou
+
+# Virtual Network
+Virtual Network:       muvodic-irou-net
+
+# Subnet po korisniku (student/instruktor)
+Subnet:                subnet-<ime>
+
+# Network Security Group po subnetu
+NSG:                   nsg-<ime>
+
+# Jump host VM
+Jump host VM:          jump-<ime>
+Jump host NIC:         jump-<ime>-nic
+Jump host PIP:         jump-<ime>-pip
+Jump host Disk:        jump-<ime>-osdisk
+
+# WordPress VM
+WordPress VM:          wp-<ime>
+WordPress NIC:         wp-<ime>-nic
+WordPress Disk:        wp-<ime>-osdisk
+WordPress Data disk:   wp-<ime>-datadisk-01, wp-<ime>-datadisk-02
+
+# Load Balancer (po studentu ili zajednički)
+Load Balancer:         lb-<ime>
+LB Public IP:          lb-<ime>-pip
+LB Backend Pool:       lb-<ime>-be
+LB Rule:               lb-<ime>-rule
+
+# Storage Account (za svakog korisnika)
+Storage Account:       stor<ime>wp (max 24 znakova, samo mala slova i brojevi)
+File share:            share-wp-<ime>
+Blob Container:        blob-<ime>
+
+# SSH ključevi (lokalno)
+SSH privatni ključ:    id_rsa_<ime>
+SSH public ključ:      id_rsa_<ime>.pub
+
+# Cloud-init konfiguracije
+Cloud-init (default):  cloud-init-storage-template.txt
+Cloud-init (test):     cloud-init-wp-<ime>.yml
+
+# Primjeri:
+# VM za studenta Pero: wp-pero, jump-pero, lb-pero, storperowp, share-wp-pero
+# VM za instruktora Mario: wp-mario, jump-mario, lb-mario, stormariowp, share-wp-mario

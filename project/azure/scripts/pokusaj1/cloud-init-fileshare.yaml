@@ -1,0 +1,7 @@
+#cloud-config
+package_update: true
+packages:
+  - cifs-utils
+runcmd:
+  - mkdir -p /mnt/azfileshare
+  - mount -t cifs //<STORAGE_ACCOUNT_NAME>.file.core.windows.net/<FILESHARE_NAME> /mnt/azfileshare -o vers=3.0,username=<STORAGE_ACCOUNT_NAME>,password=<STORAGE_KEY>,dir_mode=0777,file_mode=0777,serverino

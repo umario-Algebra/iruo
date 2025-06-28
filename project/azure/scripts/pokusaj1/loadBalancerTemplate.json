@@ -1,0 +1,38 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "location": { "type": "string" }
+  },
+  "resources": [
+    {
+      "type": "Microsoft.Network/publicIPAddresses",
+      "apiVersion": "2021-02-01",
+      "name": "lb-wp-pip",
+      "location": "[parameters('location')]",
+      "tags": { "course": "test" },
+      "sku": { "name": "Standard" },
+      "properties": { "publicIPAllocationMethod": "Static" }
+    },
+    {
+      "type": "Microsoft.Network/loadBalancers",
+      "apiVersion": "2021-02-01",
+      "name": "lb-wp",
+      "location": "[parameters('location')]",
+      "tags": { "course": "test" },
+      "dependsOn": [ "lb-wp-pip" ],
+      "properties": {
+        "frontendIPConfigurations": [
+          {
+            "name": "LoadBalancerFrontEnd",
+            "properties": {
+              "publicIPAddress": { "id": "[resourceId('Microsoft.Network/publicIPAddresses', 'lb-wp-pip')]" }
+            }
+          }
+        ],
+        "backendAddressPools": [ { "name": "BackendPool" } ]
+      },
+      "sku": { "name": "Standard" }
+    }
+  ]
+}

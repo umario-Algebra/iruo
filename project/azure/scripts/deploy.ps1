@@ -1,0 +1,359 @@
+# --- 0. LOGIN na Azure (ako nismo prijavljeni)
+try {
+    Write-Host "Provjera login sessiona..." -ForegroundColor Cyan
+    $null = Get-AzContext
+} catch {
+    Write-Host "Nisi prijavljen na Azure, pokrecem Connect-AzAccount..." -ForegroundColor Yellow
+    Connect-AzAccount
+}
+
+# --- 1. Definicije ---
+$resourceGroupName = "muvodic-irou"
+$location = "westeurope"
+
+Write-Host "`nProvjeravam postoji li resource group: $resourceGroupName" -ForegroundColor Cyan
+
+# --- 2. Provjera RG ---
+$rg = Get-AzResourceGroup -Name $resourceGroupName -ErrorAction SilentlyContinue
+
+if ($rg) {
+    Write-Host "Resource group '$resourceGroupName' vec postoji! Preskacem kreiranje." -ForegroundColor Green
+} else {
+    Write-Host "Resource group '$resourceGroupName' NE postoji. Kreiram novu..." -ForegroundColor Yellow
+    New-AzResourceGroup -Name $resourceGroupName -Location $location -Tag @{ course = "test" }
+    Write-Host "Resource group '$resourceGroupName' kreirana!" -ForegroundColor Green
+}
+
+Write-Host "`nGotovo. Sljedeci korak: CSV!" -ForegroundColor Magenta
+
+# --- 3. UCITAVANJE IZ CSV DATOTEKE ---
+$csvPath = "C:\azure\iruo\project\azure\scripts\osobe.csv"
+$korisniciFull = Import-Csv -Path $csvPath -Delimiter ";"
+$korisnici = @()
+foreach ($k in $korisniciFull) {
+    $korisnici += ($k.ime).ToLower()
+}
+Write-Host "`nKorisnici iz CSV-a: $($korisnici -join ', ')" -ForegroundColor Cyan
+
+# --- 4. VNET i SUBNETOVI ---
+$vnetName = "muvodic-irou-net"
+$templateVnet = "$PSScriptRoot\vnetTemplate.json"
+
+Write-Host "`nProvjeravam postoji li VNET: $vnetName" -ForegroundColor Cyan
+
+# Pokusaj dohvatiti VNET
+$vnet = Get-AzVirtualNetwork -Name $vnetName -ResourceGroupName $resourceGroupName -ErrorAction SilentlyContinue
+
+if ($vnet) {
+    Write-Host "VNET '$vnetName' vec postoji! Preskacem kreiranje." -ForegroundColor Green
+} else {
+    Write-Host "VNET '$vnetName' NE postoji. Deployam ARM template..." -ForegroundColor Yellow
+    $vnetDeploy = New-AzResourceGroupDeployment `
+        -ResourceGroupName $resourceGroupName `
+        -TemplateFile $templateVnet `
+        -TemplateParameterObject @{ vnetName = $vnetName; location = $location }
+    if ($vnetDeploy.ProvisioningState -eq "Succeeded") {
+        Write-Host "VNET '$vnetName' kreiran!" -ForegroundColor Green
+    } else {
+        Write-Host "Greska pri deployu VNET-a!" -ForegroundColor Red
+        $vnetDeploy
+        exit 1
+    }
+}
+
+Write-Host "`nVNET segment gotov. Sljedece: NSG po korisniku!" -ForegroundColor Magenta
+
+# 5. NSG po korisniku
+$nsgTemplate = "$PSScriptRoot\nsgTemplate.json"
+
+$korisnici = @("pero", "mario")
+foreach ($korisnik in $korisnici) {
+    $nsgName = "nsg-$korisnik"
+    $nsg = Get-AzNetworkSecurityGroup -Name $nsgName -ResourceGroupName $resourceGroupName -ErrorAction SilentlyContinue
+    if ($nsg) {
+        Write-Host "NSG '$nsgName' vec postoji! Preskacem." -ForegroundColor Green
+    } else {
+        Write-Host "NSG '$nsgName' NE postoji. Kreiram..." -ForegroundColor Yellow
+        $nsgDeploy = New-AzResourceGroupDeployment `
+            -ResourceGroupName $resourceGroupName `
+            -TemplateFile $nsgTemplate `
+            -TemplateParameterObject @{ nsgName = $nsgName; location = $location }
+        if ($nsgDeploy.ProvisioningState -eq "Succeeded") {
+            Write-Host "NSG '$nsgName' kreiran!" -ForegroundColor Green
+        } else {
+            Write-Host "Greska pri deployu NSG-a $nsgName!" -ForegroundColor Red
+            $nsgDeploy
+            exit 1
+        }
+    }
+}
+Write-Host "`nNSG segment gotov. Sljedece: povezivanje NSG-a na subnet ili VM!" -ForegroundColor Magenta
+
+# 6. Povezivanje NSG-a na subnetove
+$korisnici = @("pero", "mario")
+foreach ($korisnik in $korisnici) {
+    $subnetName = "subnet-$korisnik"
+    $nsgName = "nsg-$korisnik"
+
+    $vnet = Get-AzVirtualNetwork -Name $vnetName -ResourceGroupName $resourceGroupName
+    $subnet = $vnet.Subnets | Where-Object { $_.Name -eq $subnetName }
+    $nsg = Get-AzNetworkSecurityGroup -Name $nsgName -ResourceGroupName $resourceGroupName
+
+    if ($subnet.NetworkSecurityGroup -and $subnet.NetworkSecurityGroup.Id -eq $nsg.Id) {
+        Write-Host "NSG '$nsgName' vec povezan na '$subnetName'. Preskacem." -ForegroundColor Green
+        continue
+    }
+
+    Write-Host "Povezujem NSG '$nsgName' na subnet '$subnetName'..." -ForegroundColor Yellow
+    Set-AzVirtualNetworkSubnetConfig `
+        -VirtualNetwork $vnet `
+        -Name $subnetName `
+        -AddressPrefix $subnet.AddressPrefix `
+        -NetworkSecurityGroup $nsg | Out-Null
+
+    $vnet | Set-AzVirtualNetwork
+    Write-Host "Povezano: '$nsgName' -> '$subnetName'" -ForegroundColor Green
+}
+Write-Host "`nNSG-ovi su povezani sa subnetovima. Sljedece: storage per user!" -ForegroundColor Magenta
+
+
+# 7. Storage per user
+$storageTemplate = "$PSScriptRoot\storageTemplate.json"
+
+$korisnici = $korisnici
+foreach ($korisnik in $korisnici) {
+    $storageAccountName = ("stor" + $korisnik + "wp").ToLower()
+    $fileShareName = ("share-wp-" + $korisnik).ToLower()
+
+    $storage = Get-AzStorageAccount -Name $storageAccountName -ResourceGroupName $resourceGroupName -ErrorAction SilentlyContinue
+
+    if ($storage) {
+        Write-Host "Storage '$storageAccountName' vec postoji! Preskacem." -ForegroundColor Green
+    } else {
+        Write-Host "Storage '$storageAccountName' NE postoji. Deployam ARM template..." -ForegroundColor Yellow
+        $storageDeploy = New-AzResourceGroupDeployment `
+            -ResourceGroupName $resourceGroupName `
+            -TemplateFile $storageTemplate `
+            -TemplateParameterObject @{
+                storageAccountName = $storageAccountName
+                location           = $location
+                fileShareName      = $fileShareName
+            }
+        if ($storageDeploy.ProvisioningState -eq "Succeeded") {
+            Write-Host "Storage '$storageAccountName' i file share '$fileShareName' kreirani!" -ForegroundColor Green
+        } else {
+            Write-Host "Greska pri deployu storagea za $korisnik!" -ForegroundColor Red
+            $storageDeploy
+            exit 1
+        }
+    }
+}
+Write-Host "`nStorage segment gotov. Sljedece: SSH key provjera/generacija po korisniku!" -ForegroundColor Magenta
+Pause
+# Nakon deploya Storage Accounta, za svakog korisnika
+foreach ($korisnik in $korisnici) {
+    $storageAccountName = ("stor" + $korisnik + "wp").ToLower()
+    $resourceGroupName = "muvodic-irou"
+
+    # Provjera postoji li container 'wpblob'
+    $context = (Get-AzStorageAccount -ResourceGroupName $resourceGroupName -Name $storageAccountName).Context
+    $blobContainer = Get-AzStorageContainer -Name "wpblob" -Context $context -ErrorAction SilentlyContinue
+    if (-not $blobContainer) {
+        Write-Host "Kreiram blob container 'wpblob' za $korisnik"
+        New-AzStorageContainer -Name "wpblob" -Context $context
+    } else {
+        Write-Host "Blob container 'wpblob' vec postoji za $korisnik"
+    }
+}
+Pause
+
+# 8. SSH KEY po korisniku
+$sshFolder = "$PSScriptRoot\.ssh"
+if (-not (Test-Path $sshFolder)) { New-Item -ItemType Directory -Force -Path $sshFolder | Out-Null }
+
+$korisnici = @("pero", "mario")
+foreach ($korisnik in $korisnici) {
+    $keyPathPriv = "$sshFolder\id_rsa_$korisnik"
+    $keyPathPub  = "$sshFolder\id_rsa_$korisnik.pub"
+    if (Test-Path $keyPathPub) {
+        Write-Host "SSH kljuc za '$korisnik' uspjesno kreiran!" -ForegroundColor Green
+    } else {
+        Write-Host "Generiram SSH kljuc za '$korisnik'..." -ForegroundColor Yellow
+        # Ova naredba radi i na Windows i na Linuxu bez upisivanja passphrase
+        & ssh-keygen -t rsa -b 2048 -m PEM -f $keyPathPriv -q -N ""
+        if (Test-Path $keyPathPub) {
+            Write-Host "SSH kljuc za '$korisnik' uspjesno kreiran!" -ForegroundColor Green
+        } else {
+            Write-Host "Greska! SSH kljuc za '$korisnik' NIJE kreiran." -ForegroundColor Red
+            exit 1
+        }
+    }
+}
+Write-Host "`nSSH key segment gotov. Sljedece: Jump host po korisniku!" -ForegroundColor Magenta
+
+
+# 9. Jump host po korisniku
+$jumpTemplate = "$PSScriptRoot\jumpHostTemplate.json"
+
+foreach ($korisnik in $korisnici) {
+    $vmName = "jump-$korisnik"
+    $adminUsername = $korisnik
+    $sshKey = Get-Content "$sshFolder\id_rsa_${korisnik}.pub" -Raw
+    $vnet = Get-AzVirtualNetwork -Name $vnetName -ResourceGroupName $resourceGroupName
+    $subnet = $vnet.Subnets | Where-Object { $_.Name -eq "subnet-$korisnik" }
+
+    # Provjera VM-a
+    $vm = Get-AzVM -Name $vmName -ResourceGroupName $resourceGroupName -ErrorAction SilentlyContinue
+    if ($vm) {
+        Write-Host "Jump host VM '$vmName' vec postoji! Preskacem." -ForegroundColor Green
+        continue
+    }
+
+    Write-Host "Deployam Jump host VM za '$korisnik' ($vmName)..." -ForegroundColor Yellow
+    $deploy = New-AzResourceGroupDeployment `
+        -ResourceGroupName $resourceGroupName `
+        -TemplateFile $jumpTemplate `
+        -TemplateParameterObject @{
+            vmName        = $vmName
+            location      = $location
+            adminUsername = $adminUsername
+            sshKey        = $sshKey
+            subnetId      = $subnet.Id
+        }
+    if ($deploy.ProvisioningState -eq "Succeeded") {
+        Write-Host "Jump host VM '$vmName' kreiran!" -ForegroundColor Green
+    } else {
+        Write-Host "Greska pri deployu Jump hosta '$vmName'!" -ForegroundColor Red
+        $deploy
+        exit 1
+    }
+}
+Write-Host "`nJump host segment gotov. Sljedece: WordPress VM po korisniku!" -ForegroundColor Magenta
+
+
+# 10. WordPress VM po korisniku (sa svim SSH ključevima)
+$wpTemplate = "$PSScriptRoot\wpVMTemplate.json"
+$cloudInitTemplate = "$PSScriptRoot\cloud-init-wp-pero.yml"
+
+# Učitaj oba ključa unaprijed
+$sshKeyPero  = Get-Content "$sshFolder\id_rsa_pero.pub" -Raw
+$sshKeyMario = Get-Content "$sshFolder\id_rsa_mario.pub" -Raw
+
+foreach ($korisnik in $korisnici) {
+    $vmName = "wp-$korisnik"
+    $adminUsername = $korisnik
+    $sshKey = Get-Content "$sshFolder\id_rsa_${korisnik}.pub" -Raw
+    $vnet = Get-AzVirtualNetwork -Name $vnetName -ResourceGroupName $resourceGroupName
+    $subnet = $vnet.Subnets | Where-Object { $_.Name -eq "subnet-$korisnik" }
+    $storageAccountName = ("stor" + $korisnik + "wp").ToLower()
+    $fileShareName = ("share-wp-" + $korisnik).ToLower()
+
+    $storageAccount = Get-AzStorageAccount -ResourceGroupName $resourceGroupName -Name $storageAccountName
+    $storageKey = (Get-AzStorageAccountKey -ResourceGroupName $resourceGroupName -Name $storageAccountName)[0].Value
+
+    # --- ZAMIJENI VARIJABLE U cloud-init-u ---
+    $cloudInit = Get-Content $cloudInitTemplate -Raw
+    $cloudInit = $cloudInit `
+        -replace '\$\{storageAccount\}', $storageAccountName `
+        -replace '\$\{storageKey\}', $storageKey `
+        -replace '\$\{fileShareName\}', $fileShareName `
+        -replace '\$\{adminUsername\}', $adminUsername `
+        -replace '\$\{sshKey\}', $sshKey `
+        -replace '\$\{sshKeyPero\}', $sshKeyPero `
+        -replace '\$\{sshKeyMario\}', $sshKeyMario
+
+    $customData = [Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($cloudInit))
+
+    # Provjera VM-a
+    $vm = Get-AzVM -Name $vmName -ResourceGroupName $resourceGroupName -ErrorAction SilentlyContinue
+    if ($vm) {
+        Write-Host "WP VM '$vmName' vec postoji! Preskacem." -ForegroundColor Green
+        continue
+    }
+
+    Write-Host "Deployam WP VM za '$korisnik' ($vmName)..." -ForegroundColor Yellow
+    $deploy = New-AzResourceGroupDeployment `
+        -ResourceGroupName $resourceGroupName `
+        -TemplateFile $wpTemplate `
+        -TemplateParameterObject @{
+            vmName        = $vmName
+            location      = $location
+            adminUsername = $adminUsername
+            sshKey        = $sshKey
+            subnetId      = $subnet.Id
+            customData    = $customData
+        }
+    if ($deploy.ProvisioningState -eq "Succeeded") {
+        Write-Host "WP VM '$vmName' kreiran!" -ForegroundColor Green
+    } else {
+        Write-Host "Greska pri deployu WP VM-a '$vmName'!" -ForegroundColor Red
+        $deploy
+        exit 1
+    }
+}
+Write-Host "`nWP segment gotov. Sljedece: Load balancer po korisniku!" -ForegroundColor Magenta
+
+
+Write-Host "`nWP segment gotov. Sljedece: Load balancer po korisniku!" -ForegroundColor Magenta
+
+
+
+# 10. Load Balancer SAMO za PERU
+$lbTemplate = "$PSScriptRoot\loadBalancerTemplate.json"
+$korisnik = "pero"
+$lbName = "lb-$korisnik"
+$publicIPName = "lb-$korisnik-pip"
+
+# Provjera LB-a
+$lb = Get-AzLoadBalancer -Name $lbName -ResourceGroupName $resourceGroupName -ErrorAction SilentlyContinue
+if ($lb) {
+    Write-Host "Load Balancer '$lbName' vec postoji! Preskacem." -ForegroundColor Green
+} else {
+    Write-Host "Deployam LB za '$korisnik' ($lbName)..." -ForegroundColor Yellow
+    $deploy = New-AzResourceGroupDeployment `
+        -ResourceGroupName $resourceGroupName `
+        -TemplateFile $lbTemplate `
+        -TemplateParameterObject @{
+            lbName       = $lbName
+            location     = $location
+            publicIPName = $publicIPName
+        }
+    if ($deploy.ProvisioningState -eq "Succeeded") {
+        Write-Host "LB '$lbName' kreiran!" -ForegroundColor Green
+    } else {
+        Write-Host "Greska pri deployu LB-a '$lbName'!" -ForegroundColor Red
+        $deploy
+        exit 1
+    }
+}
+Write-Host "`nLoad Balancer segment gotov. Sljedece: povezivanje WP VM-a na LB backend pool!" -ForegroundColor Magenta
+
+# === VEZANJE WP-PERO VM-a NA LB-PERO BACKEND POOL ===
+
+$lbName = "lb-pero"
+$publicIPName = "lb-pero-pip"
+$nicName = "wp-pero-nic"
+
+# 1. Dohvati NIC objekt
+$nic = Get-AzNetworkInterface -Name $nicName -ResourceGroupName $resourceGroupName
+
+# 2. Dohvati Load Balancer i pravi backend pool objekt
+$lb = Get-AzLoadBalancer -Name $lbName -ResourceGroupName $resourceGroupName
+$backendPool = $lb.BackendAddressPools | Where-Object { $_.Name -eq "BackendPool" }
+
+# 3. Ukloni sve stare backend poole (clear array)
+$nic.IpConfigurations[0].LoadBalancerBackendAddressPools.Clear()
+
+# 4. Dodaj backend pool objekt (pravog tipa!)
+$nic.IpConfigurations[0].LoadBalancerBackendAddressPools.Add($backendPool)
+
+# 5. Spremi promjene
+Set-AzNetworkInterface -NetworkInterface $nic | Out-Null
+
+Write-Host "NIC $nicName ispravno povezan s LB-om $lbName!" -ForegroundColor Green
+
+# 6. Prikazi public IP od LB-a za brzi test
+$publicIP = Get-AzPublicIpAddress -Name $publicIPName -ResourceGroupName $resourceGroupName
+Write-Host "WordPress za PERU testiraj na: http://$($publicIP.IpAddress)" -ForegroundColor Yellow
+
+

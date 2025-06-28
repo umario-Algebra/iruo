@@ -1,0 +1,79 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "lbName":       { "type": "string" },
+    "location":     { "type": "string" },
+    "publicIPName": { "type": "string" }
+  },
+  "resources": [
+    {
+      "type": "Microsoft.Network/publicIPAddresses",
+      "apiVersion": "2022-01-01",
+      "name": "[parameters('publicIPName')]",
+      "location": "[parameters('location')]",
+      "sku": { "name": "Basic" },
+      "properties": { "publicIPAllocationMethod": "Static" },
+      "tags": { "course": "test" }
+    },
+    {
+      "type": "Microsoft.Network/loadBalancers",
+      "apiVersion": "2022-01-01",
+      "name": "[parameters('lbName')]",
+      "location": "[parameters('location')]",
+      "dependsOn": [
+        "[resourceId('Microsoft.Network/publicIPAddresses', parameters('publicIPName'))]"
+      ],
+      "properties": {
+        "frontendIPConfigurations": [
+          {
+            "name": "LoadBalancerFrontEnd",
+            "properties": {
+              "publicIPAddress": {
+                "id": "[resourceId('Microsoft.Network/publicIPAddresses', parameters('publicIPName'))]"
+              }
+            }
+          }
+        ],
+        "backendAddressPools": [
+          {
+            "name": "BackendPool"
+          }
+        ],
+        "loadBalancingRules": [
+          {
+            "name": "LBRuleHTTP",
+            "properties": {
+              "frontendIPConfiguration": {
+                "id": "[concat(resourceId('Microsoft.Network/loadBalancers', parameters('lbName')), '/frontendIPConfigurations/LoadBalancerFrontEnd')]"
+              },
+              "backendAddressPool": {
+                "id": "[concat(resourceId('Microsoft.Network/loadBalancers', parameters('lbName')), '/backendAddressPools/BackendPool')]"
+              },
+              "protocol": "Tcp",
+              "frontendPort": 80,
+              "backendPort": 80,
+              "enableFloatingIP": false,
+              "idleTimeoutInMinutes": 4,
+              "probe": {
+                "id": "[concat(resourceId('Microsoft.Network/loadBalancers', parameters('lbName')), '/probes/HealthProbe')]"
+              }
+            }
+          }
+        ],
+        "probes": [
+          {
+            "name": "HealthProbe",
+            "properties": {
+              "protocol": "Tcp",
+              "port": 80,
+              "intervalInSeconds": 5,
+              "numberOfProbes": 2
+            }
+          }
+        ]
+      },
+      "tags": { "course": "test" }
+    }
+  ]
+}
